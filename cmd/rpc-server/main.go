@@ -89,6 +89,15 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 	return nil
 }
 
+// TODO - Need call for error/alert notifications
+// object type
+// object id
+// error code
+// error message
+// meta
+
+// TODO - Need help call
+
 // mongo shit
 
 var listingsCollection *mgo.Collection
