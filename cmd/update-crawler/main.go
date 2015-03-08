@@ -7,14 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"regexp"
-	"strings"
-	_ "time"
+	"strconv"
+	"time"
 
-	"github.com/PuerkitoBio/goquery"
+	_ "github.com/PuerkitoBio/goquery"
 	"github.com/jmshelby/photochem/home"
+)
+
+const (
+	MarkupExpirationDays   = 7
+	DefaultNumberOfWorkers = 3
 )
 
 func main() {
@@ -35,164 +38,103 @@ func main() {
 	dbHost := args[0]
 	dbName := args[1]
 
+	var numberOfWorkers int
+	if len(args) > 2 {
+		var convErr error
+		numberOfWorkers, convErr = strconv.Atoi(args[2])
+		if convErr != nil {
+			fmt.Printf("Bad number of workers param")
+			os.Exit(2)
+		}
+	} else {
+		numberOfWorkers = DefaultNumberOfWorkers
+	}
+
 	// Start Up access to our listings
+	var homeDb *home.DB
 	homeDb = home.NewDB(dbHost, dbName)
 
+	fmt.Println("We have our home database, now we're gonna iterate..")
+
+	// Make channel, buffered with expected number of workers
+	listingQueue := make(chan home.Listing, numberOfWorkers)
+
+	// Start up workers
+	for i := 0; i < numberOfWorkers; i++ {
+		fmt.Println("Starting up worker ", i+1)
+		go queueWorker(listingQueue, homeDb)
+	}
+
 	homeDb.IterateAllListings(func(listing home.Listing, db *home.DB) {
+		listingQueue <- listing
 	})
 
-	//pageQueue := make(chan string)
-	//go func() { pageQueue <- startUri }()
-	// for uri := range pageQueue {
-	// 	crawl(uri, pageQueue, listingQueue)
-	// 	//time.Sleep(500 * time.Millisecond)
-	// }
+	// Close Queue
+	close(listingQueue)
+
+	fmt.Println("Somehow we're done with all of our listings... exiting.")
 }
 
-var startUri string
-var originalHost string
-var pagesFetched = make(map[string]bool)
-var pagesQueued = make(map[string]bool)
-var homeDb *home.DB
+func queueWorker(queue <-chan home.Listing, db *home.DB) {
+	for listing := range queue {
+		checkAndUpdateMarkup(listing, db)
+	}
+}
 
-func crawl(uri string, pageQueue, listingQueue chan string) {
+func checkAndUpdateMarkup(listing home.Listing, db *home.DB) {
 
-	fmt.Println("Fetching: ", uri)
+	// Get the latest date of markup for listing
+	date, found := db.GetNewestMarkupDate(listing.Id)
 
-	body := fetchPage(uri)
-	pagesFetched[uri] = true
-	delete(pagesQueued, uri)
-
-	if body == nil {
-		fmt.Println("Problem Fetching, skipping ...")
+	// If found and date is not expired, don't continue
+	if found && !isMarkupExpired(date) {
+		//fmt.Println("Current markup record is not expired yet, skipping\n  ->", listing.Url)
 		return
 	}
 
+	// Fetch page
+	//fmt.Println("Making request...")
+	bodyString, fetchErr := fetchPageString(listing.Url)
+	//fmt.Println("Making request...Done")
+	if fetchErr != nil {
+		fmt.Printf("Error Fetching Markup\n  -> %s\n  ==> %s\n", listing.Url, fetchErr)
+		// TODO -- should we retry on errors??
+		return
+	}
+
+	// Save Markup
+	saveErr := db.SaveMarkup(listing.Id, listing.Url, listing.Source, bodyString)
+
+	if saveErr == nil {
+		bytes := len(bodyString)
+		fmt.Printf("Saved Markup (%v bytes)\n  -> %s\n", bytes, listing.Url)
+	} else {
+		fmt.Printf("Error Saving Markup\n  -> %s\n  ==> %s\n", listing.Url, saveErr)
+		return
+		// TODO -- should we retry on errors??
+	}
+
+}
+
+func isMarkupExpired(date time.Time) bool {
+	expirationHours := float64(MarkupExpirationDays * 24)
+	return time.Since(date).Hours() > expirationHours
+}
+
+func fetchPageString(uri string) (string, error) {
+	body, err := fetchPage(uri)
+
+	if err != nil {
+		return "", err
+	}
+
+	defer body.Close()
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(body)
-	bodyString := buf.String()
-
-	body.Close()
-
-	// Pull out images, if this is a home for sale link
-	checkForAndStoreImages(uri, bodyString)
-
-	// Pull out potential new links
-	links := collectInterestingLinks(bodyString)
-
-	for _, link := range links {
-		absolute := resolveReferenceLink(link, uri)
-		if uri != "" {
-
-			if pagesQueued[absolute] {
-				continue
-			}
-
-			if !pagesFetched[absolute] && shouldAddToQueue(absolute) {
-				//fmt.Println("		-> Adding: ", absolute);
-				if isListingUri(absolute) {
-					if homeDb.DoesListingExist(absolute) {
-						fmt.Println("Listing already exists, skipping: ", absolute)
-					} else {
-						go func() { listingQueue <- absolute }()
-					}
-				} else {
-					go func() { pageQueue <- absolute }()
-				}
-				pagesQueued[absolute] = true
-				//fmt.Println(absolute)
-			}
-		}
-	}
-
+	return buf.String(), nil
 }
 
-func isListingUri(uri string) bool {
-	// Make sure this is a property URL
-	if match, _ := regexp.MatchString("www.homes.com/property/\\d", uri); !match {
-		//fmt.Println("Url not a property, skipping..", uri)
-		return false
-	}
-	return true
-}
-
-func checkForAndStoreImages(uri, pageSource string) {
-
-	//fmt.Println("Parsing Images for => ", uri)
-	if !isListingUri(uri) {
-		return
-	}
-
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(pageSource))
-	if err != nil {
-		fmt.Printf("[ERR] Couldn't parse page: %s - %s\n", uri, err)
-		return
-	}
-
-	titleText := doc.Find("title").First().Text()
-	if !strings.Contains(titleText, " for sale |") {
-		fmt.Println("House Not for sale: ", titleText)
-		return
-	}
-
-	imageLinks := make([]string, 0)
-	doc.Find("#slider img").Each(func(i int, s *goquery.Selection) {
-
-		imageLink, _ := s.Attr("src")
-
-		//fmt.Println("		-> ", imageLink)
-
-		if imageLink != "" {
-			imageLinks = append(imageLinks, imageLink)
-		}
-	})
-	//fmt.Println("		--- ")
-	//fmt.Println("")
-
-	if len(imageLinks) > 0 {
-		go persistImages(uri, imageLinks)
-	}
-}
-
-func collectInterestingLinks(pageSource string) []string {
-
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(pageSource))
-	if err != nil {
-		fmt.Printf("[ERR] Couldn't parse page to collect links: %s\n", err)
-		return nil
-	}
-
-	excludeSelection := doc.Find("*[class*=OffMarket] a") // All off market listings
-
-	links := make([]string, 0)
-	doc.Find("a").NotSelection(excludeSelection).Each(func(i int, s *goquery.Selection) {
-		link, _ := s.Attr("href")
-		if link != "" {
-			links = append(links, link)
-		}
-	})
-
-	return links
-}
-
-func shouldAddToQueue(uri string) bool {
-
-	// Parse Url
-	url, err := url.Parse(uri)
-	if err != nil {
-		fmt.Println("Could not parse uri: ", uri, " error: ", err)
-		return false
-	}
-
-	// No if the host is different from the starting host
-	if url.Host != originalHost {
-		return false
-	}
-
-	return true
-}
-
-func fetchPage(uri string) io.ReadCloser {
+func fetchPage(uri string) (io.ReadCloser, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -202,53 +144,16 @@ func fetchPage(uri string) io.ReadCloser {
 
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko")
 
 	resp, err := client.Do(req)
 
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return resp.Body
-}
-
-func resolveReferenceLink(href, base string) string {
-	uri, err := url.Parse(href)
-	if err != nil {
-		return ""
-	}
-	baseUrl, err := url.Parse(base)
-	if err != nil {
-		return ""
-	}
-	uri = baseUrl.ResolveReference(uri)
-
-	// Also clean it up ..
-	// Remove fragment
-	uri.Fragment = ""
-
-	// TODO -- remove trailing slashes?
-
-	return uri.String()
-}
-
-func persistImages(uri string, imageLinks []string) {
-
-	listing := home.Listing{
-		Url:       uri,
-		Source:    "homes.com",
-		ImageUrls: imageLinks,
-	}
-
-	mongoErr := getMongoCollection().Insert(record)
-	if mongoErr != nil {
-		fmt.Printf("Mongo Processed url: with error: %s\n", uri, mongoErr)
-	} else {
-		//fmt.Println("Inserted record: ", record);
-		fmt.Println("Saved Images: ", uri)
-	}
+	return resp.Body, nil
 }
 
 // ajax image request example
