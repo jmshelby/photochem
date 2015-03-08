@@ -1,13 +1,15 @@
 package home
 
 import (
+	"fmt"
+	"github.com/tdewolff/minify"
+	"github.com/tdewolff/minify/html"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"time"
 )
 
 const (
-	//ListingCollectionName        = "crawl_session.20150222121610" // TODO - change this once fixed in db
 	ListingCollectionName        = "Listings"
 	ListingMarkeupCollectionName = "ListingsMarkup"
 )
@@ -38,6 +40,7 @@ func (self *DB) DoesListingExist(uri string) bool {
 
 	if err != nil {
 		// TODO - Should we be using panic?? Is it like exceptions?
+		fmt.Println("Going to panic from err: ", err)
 		panic(err)
 	}
 
@@ -53,9 +56,73 @@ func (self *DB) UpsertListing(uri string, listing Listing) error {
 
 	_, err := collection.Upsert(bson.M{"listingurl": uri}, listing)
 
-	// TODO -- do we want to do anything with the change info returned here??
+	// TODO -- do we want to do anything with the change info returned here above??
 
 	return err
+}
+
+func (self *DB) GetNewestMarkupDate(listingId bson.ObjectId) (time.Time, bool) {
+	collection := self.mongoBroker.listingMarkupCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	query := collection.Find(bson.M{"listingId": listingId})
+	query.Select(bson.M{"createdDate": 1})
+	query.Sort("-createdDate")
+
+	var result map[string]interface{}
+	query.One(&result)
+
+	var returnDate time.Time
+
+	// If id wasn't returned, then we don't have a time
+	_, found := result["_id"]
+
+	if !found {
+		return returnDate, false
+	}
+
+	returnDate, found = result["createdDate"].(time.Time)
+
+	return returnDate, found
+}
+
+func (self *DB) SaveMarkup(listingId bson.ObjectId, uri, source, content string) error {
+	collection := self.mongoBroker.listingMarkupCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	// Get storable content string
+	storableContent := prepareMarkupForStorage(content)
+
+	doc := ListingMarkup{
+		ListingId:   listingId,
+		Url:         uri,
+		Source:      source,
+		Content:     storableContent,
+		CreatedDate: time.Now(),
+	}
+
+	err := collection.Insert(doc)
+
+	return err
+}
+
+func (self *DB) IterateAllListings(handler func(Listing, *DB)) error {
+
+	collection := self.mongoBroker.listingCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	iter := collection.Find(nil).Iter()
+
+	var result Listing
+
+	for iter.Next(&result) {
+		handler(result, self)
+	}
+
+	if err := iter.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Model: Listing
@@ -66,7 +133,7 @@ type Listing struct {
 
 	Properties ListingProperties `bson:"properties"`
 
-	// TODO - Later, change this to it's own model
+	// TODO - Later, change this to it's own model, under properties
 	ImageUrls []string `bson:"imagelinks"` // TODO - change this once fixed in db
 
 	Status      ListingStatus `bson:"listingStatus"`
@@ -91,10 +158,11 @@ type ListingAddress struct {
 
 // Model: ListingMarkup
 type ListingMarkup struct {
-	Id          bson.ObjectId `bson:"_id"`
+	Id          bson.ObjectId `bson:"_id,omitempty"`
 	ListingId   bson.ObjectId `bson:"listingId"`
 	Url         string        `bson:"url"`
 	Source      string        `bson:"source"`
+	Content     string        `bson:"content"`
 	CreatedDate time.Time     `bson:"createdDate"`
 }
 
@@ -113,11 +181,29 @@ var listingStatuses = [...]string{
 
 func (status ListingStatus) String() string { return listingStatuses[status-1] }
 
+// Cleanup the markup for storage
+func prepareMarkupForStorage(rawMarkup string) string {
+
+	m := minify.NewMinifier()
+	m.Add("text/html", html.Minify)
+
+	cleaned, err := m.MinifyString("text/html", rawMarkup)
+	if err != nil {
+		fmt.Println("Problem minifying markup: ", err)
+		return rawMarkup
+	}
+
+	fmt.Printf("Compressed markup from: %v to: %v \n", len(rawMarkup), len(cleaned))
+
+	return cleaned
+}
+
 // Mongo Broker
 func newMongoBroker(host, name string) *mongoBroker {
 	session, err := mgo.Dial(host)
 	if err != nil {
 		// TODO - Should we be using panic?? Is it like exceptions?
+		fmt.Println("Going to panic from err: ", err)
 		panic(err)
 	}
 
