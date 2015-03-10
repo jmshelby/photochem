@@ -102,17 +102,22 @@ func checkAndUpdateMarkup(listing home.Listing, db *home.DB) {
 		return
 	}
 
-	// Save Markup
-	saveErr := db.SaveMarkup(listing.Id, listing.Url, listing.Source, bodyString)
+	// TODO -- is this safe??
+	go func() {
 
-	if saveErr == nil {
-		bytes := len(bodyString)
-		fmt.Printf("Saved Markup (%v bytes)\n  -> %s\n", bytes, listing.Url)
-	} else {
-		fmt.Printf("Error Saving Markup\n  -> %s\n  ==> %s\n", listing.Url, saveErr)
-		return
-		// TODO -- should we retry on errors??
-	}
+		// Save Markup
+		saveErr := db.SaveMarkup(listing.Id, listing.Url, listing.Source, bodyString)
+
+		if saveErr == nil {
+			bytes := len(bodyString)
+			fmt.Printf("Saved Markup (%v bytes)\n  -> %s\n", bytes, listing.Url)
+		} else {
+			fmt.Printf("Error Saving Markup\n  -> %s\n  ==> %s\n", listing.Url, saveErr)
+			return
+			// TODO -- should we retry on errors??
+		}
+
+	}()
 
 }
 

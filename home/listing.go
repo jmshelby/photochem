@@ -106,6 +106,32 @@ func (self *DB) SaveMarkup(listingId bson.ObjectId, uri, source, content string)
 	return err
 }
 
+func (self *DB) IterateListingsMarkup(limit int, handler func(ListingMarkup, *DB)) error {
+
+	collection := self.mongoBroker.listingMarkupCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	// TODO -- need to add query to filter unscraped markup
+	query := collection.Find(nil)
+
+	if limit != 0 {
+		query.Limit(limit)
+	}
+
+	iter := query.Iter()
+
+	var result ListingMarkup
+
+	for iter.Next(&result) {
+		handler(result, self)
+	}
+
+	if err := iter.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (self *DB) IterateAllListings(handler func(Listing, *DB)) error {
 
 	collection := self.mongoBroker.listingCollection()
