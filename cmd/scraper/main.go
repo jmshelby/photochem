@@ -95,45 +95,68 @@ func main() {
 		{"longitude", "[itemprop=longitude]", "content", false},
 	}
 
-	//<input type="hidden" value="226137560" name="propid" id="propid" />
-	//<input type="hidden" name="supplierid" id="supplierid" value="43" />
-	//<input type="hidden" name="agentid" id="agentid" value="404492" />
-	//<input type="hidden" name="MLSNumber" value="1506331" />
-	//<input type="hidden" name="Address" id="Address" value="305 Brooke Ave" />
-	//<input type="hidden" name="State" id="State" value="VA" />
-	//<input type="hidden" name="City" id="City" value="Norfolk" />
-	//<input type="hidden" name="Price" id="Price" value="699900" />
-	//<input type="hidden" name="Zip" id="Zip" value="23510" />
-
-	//<meta itemprop="latitude" content="36.849484" />
-	//<meta itemprop="longitude" content="-76.295258" />
-
 	i := 0
-	homeDb.IterateListingsMarkup(1000, func(markup home.ListingMarkup, db *home.DB) {
+	offMarket := 0
+	homeDb.IterateListingsMarkup(200000, func(markup home.ListingMarkup, db *home.DB) {
 		i++
 
 		doc := makeDocument(markup.Content)
 
-		status, _ := doc.Find("input[name=listing_status]").First().Attr("value")
-		fmt.Printf("%v) [%v] %v\n", i, status, markup.Url)
+		status, _ := doc.Find("form.nav-search input[name=listing_status]").First().Attr("value")
+		fmt.Printf("%v) [%v] - %v - %v\n", i, status, markup.ListingId, markup.Url)
 
 		if status != "FOR SALE" {
 			fmt.Printf("--> No longer for sale\n")
+			db.UpdateListingStatus(markup.ListingId, false)
+			db.MarkupScraped(markup.Id)
+			offMarket++
 			return
 		}
 
-		//var scrapedFields = make(map[string]string)
+		var out = make(map[string]string)
 		for _, v := range fieldSelectors {
 
 			value := getFieldValueFromSelector(doc, v)
 
-			//scrapedFields[k] = value
+			out[v.FieldName] = value
 
-			fmt.Printf("-> %v: %v\n", v.FieldName, value)
+			fmt.Printf("  -> %v: %v\n", v.FieldName, value)
 		}
+
+		//fmt.Printf("  => Scrapped Fields: %+v\n", out)
+
+		lat, _ := strconv.ParseFloat(out["latitude"], 64)
+		long, _ := strconv.ParseFloat(out["longitude"], 64)
+		price, _ := strconv.Atoi(out["price"])
+
+		// Build listing properties structure
+		props := home.ListingProperties{
+			CurrentPrice: uint(price),
+			MLS:          out["mls"],
+			Location: home.GeoJson{
+				Type:        "Point",
+				Coordinates: []float64{long, lat},
+			},
+			Address: home.ListingAddress{
+				Street: out["street"],
+				City:   out["city"],
+				State:  out["state"],
+				Zip:    out["zip"],
+			},
+		}
+
+		props.Meta = map[string]interface{}{
+			"propertyId": out["propertyId"],
+			"supplierId": out["supplierId"],
+			"agentId":    out["agentId"],
+		}
+
+		db.UpdateListingProperties(markup.ListingId, props)
+		db.MarkupScraped(markup.Id)
 
 	})
 	fmt.Println("Looped on this many: ", i)
+	fmt.Println("Off Market count: ", offMarket)
 
 	// Close Queue
 	//close(listingQueue)
