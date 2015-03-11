@@ -65,14 +65,21 @@ func main() {
 		go queueWorker(listingQueue, homeDb)
 	}
 
-	homeDb.IterateAllListings(func(listing home.Listing, db *home.DB) {
-		listingQueue <- listing
-	})
+	var count int
+	for {
+		count = 0
+		homeDb.IterateAllListings(func(listing home.Listing, db *home.DB) {
+			listingQueue <- listing
+			count++
+		})
+		fmt.Println("Somehow we're done with all of our listings... starting over again.")
+		fmt.Println("Processed this many: ", count)
+	}
+
 
 	// Close Queue
 	close(listingQueue)
 
-	fmt.Println("Somehow we're done with all of our listings... exiting.")
 }
 
 func queueWorker(queue <-chan home.Listing, db *home.DB) {
