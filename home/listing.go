@@ -50,13 +50,44 @@ func (self *DB) DoesListingExist(uri string) bool {
 	return false
 }
 
-func (self *DB) UpsertListing(uri string, listing Listing) error {
+func (self *DB) UpdateListingStatus(listingId bson.ObjectId, forSale bool) error {
 	collection := self.mongoBroker.listingCollection()
 	defer self.mongoBroker.closeCollection(collection)
 
-	_, err := collection.Upsert(bson.M{"listingurl": uri}, listing)
+	err := collection.UpdateId(listingId, bson.M{
+		"$set": bson.M{
+			"isForSale":   forSale,
+			"updatedDate": time.Now(),
+		},
+	})
+	return err
+}
 
-	// TODO -- do we want to do anything with the change info returned here above??
+func (self *DB) UpdateListingProperties(listingId bson.ObjectId, properties ListingProperties) error {
+	collection := self.mongoBroker.listingCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	err := collection.UpdateId(listingId, bson.M{
+		"$set": bson.M{
+			"isForSale":   true,
+			"properties":  properties,
+			"updatedDate": time.Now(),
+		},
+	})
+
+	return err
+}
+
+func (self *DB) MarkupScraped(markupId bson.ObjectId) error {
+
+	collection := self.mongoBroker.listingMarkupCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	err := collection.UpdateId(markupId, bson.M{
+		"$set": bson.M{
+			"scrapedDate": time.Now(),
+		},
+	})
 
 	return err
 }
@@ -111,8 +142,8 @@ func (self *DB) IterateListingsMarkup(limit int, handler func(ListingMarkup, *DB
 	collection := self.mongoBroker.listingMarkupCollection()
 	defer self.mongoBroker.closeCollection(collection)
 
-	// TODO -- need to add query to filter unscraped markup
-	query := collection.Find(nil)
+	query := collection.Find(bson.M{"scrapedDate": bson.M{"$exists": false}})
+	//query := collection.Find(nil)
 
 	if limit != 0 {
 		query.Limit(limit)
@@ -157,29 +188,35 @@ type Listing struct {
 	Url    string        `bson:"listingurl"`    // TODO - change this once fixed in db
 	Source string        `bson:"listingsource"` // TODO - change this once fixed in db
 
-	Properties ListingProperties `bson:"properties"`
+	Properties ListingProperties `bson:"properties,omitempty"`
 
 	// TODO - Later, change this to it's own model, under properties
 	ImageUrls []string `bson:"imagelinks"` // TODO - change this once fixed in db
 
-	Status      ListingStatus `bson:"listingStatus"`
-	UpdatedDate time.Time     `bson:"updatedDate,omitempty"`
-	CheckDate   time.Time     `bson:"checkDate,omitempty"`
+	ForSale     bool      `bson:"isForSale"`
+	UpdatedDate time.Time `bson:"updatedDate,omitempty"`
+	CheckDate   time.Time `bson:"checkDate,omitempty"`
 }
 
 // Nested Model: ListingProperties
 type ListingProperties struct {
-	CurrentPrice int                    `bson:"currentPrice,omitempty"`
+	CurrentPrice uint                   `bson:"currentPrice,omitempty"`
+	MLS          string                 `bson:"mls"`
 	Address      ListingAddress         `bson:"address,omitempty"`
+	Location     GeoJson                `bson:"geoLocation,omitempty"`
 	Meta         map[string]interface{} `bson:",inline"` // All extra data on this sub document.. aka super scheama
 }
 
 type ListingAddress struct {
-	Street1 string `json:"street1"`
-	Street2 string `bson:"street2"`
-	City    string `bson:"city"`
-	State   string `bson:"state"`
-	Zip     string `bson:"zip"`
+	Street string `bson:"street"`
+	City   string `bson:"city"`
+	State  string `bson:"state"`
+	Zip    string `bson:"zip"`
+}
+
+type GeoJson struct {
+	Type        string    `bson:"type"`
+	Coordinates []float64 `bson:"coordinates"`
 }
 
 // Model: ListingMarkup
@@ -190,22 +227,8 @@ type ListingMarkup struct {
 	Source      string        `bson:"source"`
 	Content     string        `bson:"content"`
 	CreatedDate time.Time     `bson:"createdDate"`
+	ScrapedDate time.Time     `bson:"scrapedDate"`
 }
-
-// Status Enum
-type ListingStatus int
-
-const (
-	ForSale ListingStatus = 1 + iota
-	OffMarket
-)
-
-var listingStatuses = [...]string{
-	"for_sale",
-	"off_market",
-}
-
-func (status ListingStatus) String() string { return listingStatuses[status-1] }
 
 // Cleanup the markup for storage
 func prepareMarkupForStorage(rawMarkup string) string {
