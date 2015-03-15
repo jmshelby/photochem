@@ -48,7 +48,6 @@ type WebServiceListing struct {
 }
 
 type WebServiceListingPhoto struct {
-	Tag string `json:"tag"`
 	Src string `json:"src"`
 }
 
@@ -73,7 +72,6 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 		for photoIndex, image := range listing.Images {
 
 			photos[photoIndex] = WebServiceListingPhoto{
-				Tag: "unknown",
 				Src: image,
 			}
 		}
