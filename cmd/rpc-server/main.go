@@ -105,7 +105,7 @@ var listingsCollection *mgo.Collection
 func collection() *mgo.Collection {
 	if listingsCollection == nil {
 		mongoSession, _ := mgo.Dial("hqopti1")
-		listingsCollection = mongoSession.DB("PhotoChemistry").C("crawl_session.20150222121610")
+		listingsCollection = mongoSession.DB("PhotoChemistry-Live").C("Listings")
 	}
 	return listingsCollection
 }
