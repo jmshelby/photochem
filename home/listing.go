@@ -2,10 +2,12 @@ package home
 
 import (
 	"fmt"
+	"github.com/nf/geocode"
 	"github.com/tdewolff/minify"
 	"github.com/tdewolff/minify/html"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	_ "strconv"
 	"time"
 )
 
@@ -182,6 +184,149 @@ func (self *DB) IterateAllListings(handler func(Listing, *DB)) error {
 	return nil
 }
 
+func (self *DB) QueryListings(query ListingsQuery) (*[]Listing, int) {
+
+	collection := self.mongoBroker.listingCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	q := collection.Find(query.buildMongoQuery())
+
+	// Get the total count from the query
+	count, _ := q.Count()
+
+	if query.limitFl {
+		q.Limit(int(query.limit))
+	}
+
+	var result []Listing
+
+	q.All(&result)
+
+	return &result, count
+}
+
+func (self *DB) NewListingsQuery() *ListingsQuery {
+	query := ListingsQuery{db: self}
+	query.Init()
+	return &query
+}
+
+type ListingsQuery struct {
+	limitFl bool
+	limit   uint
+
+	excludeFl bool
+	excluding []string
+	includeFl bool
+	including []string
+
+	priceMinFl bool
+	priceMin   uint
+	priceMaxFl bool
+	priceMax   uint
+
+	locationFl          bool
+	locationZip         string
+	locationZipDistance uint
+	location            GeoJson
+
+	db *DB
+}
+
+func (self *ListingsQuery) Fetch() (*[]Listing, int) {
+	return self.db.QueryListings(*self)
+}
+
+func (self *ListingsQuery) Init() {
+	self.limitFl = false
+	self.excludeFl = false
+	self.excluding = []string{}
+	self.includeFl = false
+	self.including = []string{}
+	self.priceMinFl = false
+	self.priceMaxFl = false
+	self.locationFl = false
+}
+
+func (self *ListingsQuery) LimitTo(limit uint) {
+	self.limit = limit
+	self.limitFl = true
+}
+
+func (self *ListingsQuery) Exclude(ids ...string) {
+	self.excluding = append(self.excluding, ids...)
+	self.excludeFl = true
+}
+
+func (self *ListingsQuery) Include(ids ...string) {
+	self.including = append(self.including, ids...)
+	self.includeFl = true
+}
+
+func (self *ListingsQuery) PriceAbove(filter uint) {
+	self.priceMin = filter
+	self.priceMinFl = true
+}
+
+func (self *ListingsQuery) PriceUnder(filter uint) {
+	self.priceMax = filter
+	self.priceMaxFl = true
+}
+
+func (self *ListingsQuery) PriceBetween(min uint, max uint) {
+	self.PriceAbove(min)
+	self.PriceUnder(max)
+}
+
+// TODO - Add error handling here later
+func (self *ListingsQuery) NearZipCode(zip string, distance uint) {
+	self.locationFl = true
+	// Just set the recevied data so we have it
+	self.locationZip = zip
+	self.locationZipDistance = distance
+	// Get the actual geo json coords
+	self.location = FetchZipCodeCoords(zip)
+}
+
+func (self *ListingsQuery) buildMongoQuery() bson.M {
+	query := bson.M{}
+
+	idQuery := bson.M{}
+	if self.excludeFl {
+		idQuery["$nin"] = objectIds(self.excluding)
+	}
+	if self.includeFl {
+		idQuery["$in"] = objectIds(self.including)
+	}
+	if self.includeFl || self.excludeFl {
+		query["_id"] = idQuery
+	}
+
+	priceQuery := bson.M{}
+	if self.priceMaxFl {
+		priceQuery["$lt"] = self.priceMax
+	}
+	if self.priceMinFl {
+		priceQuery["$gt"] = self.priceMin
+	}
+	if self.priceMaxFl || self.priceMinFl {
+		query["properties.currentPrice"] = priceQuery
+	}
+
+	if self.locationFl {
+		query["properties.geoLocation"] = bson.M{
+			"$nearSphere": bson.M{
+				"$geometry":    self.location,
+				"$minDistance": 0,
+				"$maxDistance": self.locationZipDistance,
+			},
+		}
+	}
+	fmt.Printf("mongo query: %+v\n", query)
+
+	return query
+}
+
 // Model: Listing
 type Listing struct {
 	Id     bson.ObjectId `bson:"_id"`
@@ -204,7 +349,7 @@ type ListingProperties struct {
 	MLS          string                 `bson:"mls"`
 	Address      ListingAddress         `bson:"address,omitempty"`
 	Location     GeoJson                `bson:"geoLocation,omitempty"`
-	Meta         map[string]interface{} `bson:",inline"` // All extra data on this sub document.. aka super scheama
+	Meta         map[string]interface{} `bson:",inline" json:"-"` // All extra data on this sub document.. aka super scheama
 }
 
 type ListingAddress struct {
@@ -291,4 +436,53 @@ func (self *mongoBroker) listingMarkupCollection() *mgo.Collection {
 
 func (self *mongoBroker) closeCollection(collection *mgo.Collection) {
 	collection.Database.Session.Close()
+}
+
+// TODO - add error handling here later
+var zipCache map[string]GeoJson = make(map[string]GeoJson)
+
+func FetchZipCodeCoords(zip string) GeoJson {
+
+	cache, cacheFound := zipCache[zip]
+	if cacheFound {
+		fmt.Println("returning cached zip data")
+		return cache
+	}
+
+	req := &geocode.Request{Provider: geocode.GOOGLE, Region: "us", Address: zip}
+
+	resp, err := req.Lookup(nil)
+
+	if err != nil {
+		fmt.Println("Error when fetching zip coords: ", err)
+		return GeoJson{Type: "Point"}
+	}
+
+	if resp.Status != "OK" {
+		fmt.Println("Bad response when fetching zip coords: ", resp)
+		return GeoJson{Type: "Point"}
+	}
+
+	fmt.Printf("google resp: %+v\n", resp)
+
+	lat := resp.GoogleResponse.Results[0].Geometry.Location.Lat
+	lng := resp.GoogleResponse.Results[0].Geometry.Location.Lng
+
+	returnCoords := GeoJson{
+		Type:        "Point",
+		Coordinates: []float64{lng, lat},
+	}
+
+	// Cache it
+	zipCache[zip] = returnCoords
+
+	return returnCoords
+}
+
+func objectIds(idStrings []string) []bson.ObjectId {
+	objectIds := make([]bson.ObjectId, len(idStrings))
+	for i, idString := range idStrings {
+		objectIds[i] = bson.ObjectIdHex(idString)
+	}
+	return objectIds
 }
