@@ -1,17 +1,40 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gorilla/rpc/v2"
 	"github.com/gorilla/rpc/v2/json2"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/jmshelby/photochem/home"
 )
 
+var homeDb *home.DB
+
 func main() {
+
+	flag.Parse()
+	args := flag.Args()
+	fmt.Println(args)
+
+	if len(args) < 1 {
+		fmt.Println("Please specify db host")
+		os.Exit(1)
+	}
+	if len(args) < 2 {
+		fmt.Println("Please specify db name")
+		os.Exit(1)
+	}
+
+	dbHost := args[0]
+	dbName := args[1]
+
+	// Start Up access to our listings
+	homeDb = home.NewDB(dbHost, dbName)
+
 	s := rpc.NewServer()
 	// json-rpc version 2
 	s.RegisterCodec(CodecWithCors([]string{"*"}, json2.NewCodec()), "application/json")
@@ -24,17 +47,19 @@ func main() {
 // Web request stuff
 
 type WebServiceListingRequest struct {
-	Max        int      `json:"max"`
-	ExcludeIds []string `json:"excludeIds"`
-	PriceMin   int      `json:"minPrice"`
-	PriceMax   int      `json:"maxPrice"`
-	// zip code
-	// lat/long with distance from
+	Limit       uint     `json:"limit"`
+	ExcludeIds  []string `json:"excludeIds"`
+	IncludeIds  []string `json:"includeIds"`
+	PriceMin    uint     `json:"minPrice"`
+	PriceMax    uint     `json:"maxPrice"`
+	Zip         string   `json:"zip"`
+	ZipDistance uint     `json:"zip-meters"`
 }
 
 type WebServiceListingResponse struct {
-	Listings []WebServiceListing `json:"listings"`
-	Total    int                 `json:"totalCount"`
+	Listings      []WebServiceListing `json:"listings"`
+	Total         int                 `json:"totalCount"`
+	ResponseTotal int                 `json:"responseCount"`
 	// return total listings available??
 	// return current max??
 	// return current count actually returned??
@@ -42,9 +67,10 @@ type WebServiceListingResponse struct {
 }
 
 type WebServiceListing struct {
-	Id     string                   `json:"id"`
-	Href   string                   `json:"href"`
-	Photos []WebServiceListingPhoto `json:"photos"`
+	Id         string                   `json:"id"`
+	Href       string                   `json:"href"`
+	Properties interface{}              `json:"properties,omitempty"`
+	Photos     []WebServiceListingPhoto `json:"photos"`
 }
 
 type WebServiceListingPhoto struct {
@@ -53,23 +79,38 @@ type WebServiceListingPhoto struct {
 
 type WebService struct{}
 
-func (self *WebService) GetRawListings(r *http.Request, args *WebServiceListingRequest, reply *[]HouseListing) error {
-	listings, _ := getListings(999, nil)
-	*reply = listings
-	return nil
-}
-
 func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequest, reply *WebServiceListingResponse) error {
 
 	fmt.Printf("request: %+v\n", args)
 
-	listings, total := getListings(args.Max, args.ExcludeIds)
+	query := homeDb.NewListingsQuery()
+
+	if args.Limit != 0 {
+		query.LimitTo(args.Limit)
+	}
+	if len(args.ExcludeIds) > 0 {
+		query.Exclude(args.ExcludeIds...)
+	}
+	if len(args.IncludeIds) > 0 {
+		query.Include(args.IncludeIds...)
+	}
+	if args.PriceMin != 0 {
+		query.PriceAbove(args.PriceMin)
+	}
+	if args.PriceMax != 0 {
+		query.PriceUnder(args.PriceMax)
+	}
+	if args.Zip != "" && args.ZipDistance != 0 {
+		query.NearZipCode(args.Zip, args.ZipDistance)
+	}
+
+	listings, total := query.Fetch()
 
 	// TODO -- move the converting to listing structures to another function
-	response := make([]WebServiceListing, len(listings))
-	for i, listing := range listings {
-		photos := make([]WebServiceListingPhoto, len(listing.Images))
-		for photoIndex, image := range listing.Images {
+	response := make([]WebServiceListing, len(*listings))
+	for i, listing := range *listings {
+		photos := make([]WebServiceListingPhoto, len(listing.ImageUrls))
+		for photoIndex, image := range listing.ImageUrls {
 
 			photos[photoIndex] = WebServiceListingPhoto{
 				Src: image,
@@ -77,14 +118,16 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 		}
 
 		response[i] = WebServiceListing{
-			Id:     listing.Id.Hex(),
-			Href:   listing.ListingUrl,
-			Photos: photos,
+			Id:         listing.Id.Hex(),
+			Href:       listing.Url,
+			Properties: listing.Properties,
+			Photos:     photos,
 		}
 	}
 
 	reply.Listings = response
 	reply.Total = total
+	reply.ResponseTotal = len(*listings)
 
 	return nil
 }
@@ -99,48 +142,6 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 // TODO - Need help call
 
 // mongo shit
-
-var listingsCollection *mgo.Collection
-
-func collection() *mgo.Collection {
-	if listingsCollection == nil {
-		mongoSession, _ := mgo.Dial("hqopti1")
-		listingsCollection = mongoSession.DB("PhotoChemistry-Live").C("Listings")
-	}
-	return listingsCollection
-}
-
-type HouseListing struct {
-	Id            bson.ObjectId `bson:"_id"`
-	ListingUrl    string        `bson:"listingurl"`
-	ListingSource string        `bson:"listingsource"`
-	Images        []string      `bson:"imagelinks"`
-}
-
-func getListings(limit int, skip []string) ([]HouseListing, int) {
-
-	count, _ := collection().Count()
-	fmt.Println("Count from remote mongodb: ", count)
-
-	objectIds := make([]bson.ObjectId, len(skip))
-	for i, idString := range skip {
-		objectIds[i] = bson.ObjectIdHex(idString)
-	}
-
-	query := collection().Find(bson.M{
-		"_id": bson.M{
-			"$nin": objectIds,
-		},
-	})
-
-	query.Limit(limit)
-
-	var result []HouseListing
-
-	query.All(&result)
-
-	return result, count
-}
 
 func CodecWithCors(corsDomains []string, unpimped rpc.Codec) rpc.Codec {
 	return corsCodec{corsDomains, unpimped}
