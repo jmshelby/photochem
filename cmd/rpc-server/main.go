@@ -15,6 +15,7 @@ func main() {
 	s := rpc.NewServer()
 	// json-rpc version 2
 	s.RegisterCodec(CodecWithCors([]string{"*"}, json2.NewCodec()), "application/json")
+	s.RegisterCodec(CodecWithCors([]string{"*"}, json2.NewCodec()), "application/json; charset=UTF-8")
 	s.RegisterService(new(WebService), "PhotoChem")
 	http.Handle("/rpc", s)
 	http.ListenAndServe(":10000", nil)
@@ -148,34 +149,22 @@ func CodecWithCors(corsDomains []string, unpimped rpc.Codec) rpc.Codec {
 }
 
 type corsCodecRequest struct {
-	corsDomains            []string
-	underlyingCodecRequest rpc.CodecRequest
+	corsDomains []string
+	rpc.CodecRequest
 }
 
 //override exactly one method of the underlying anonymous field and delegate to it.
 func (ccr corsCodecRequest) WriteResponse(w http.ResponseWriter, reply interface{}) {
 	w.Header().Add("Access-Control-Allow-Origin", strings.Join(ccr.corsDomains, " "))
-	ccr.underlyingCodecRequest.WriteResponse(w, reply)
-}
-
-func (ccr corsCodecRequest) Method() (string, error) {
-	return ccr.underlyingCodecRequest.Method()
-}
-
-func (ccr corsCodecRequest) ReadRequest(request interface{}) error {
-	return ccr.underlyingCodecRequest.ReadRequest(request)
-}
-
-func (ccr corsCodecRequest) WriteError(w http.ResponseWriter, status int, err error) {
-	ccr.underlyingCodecRequest.WriteError(w, status, err)
+	ccr.CodecRequest.WriteResponse(w, reply)
 }
 
 type corsCodec struct {
-	corsDomains     []string
-	underlyingCodec rpc.Codec
+	corsDomains []string
+	rpc.Codec
 }
 
 //override exactly one method of the underlying anonymous field and delegate to it.
 func (cc corsCodec) NewRequest(req *http.Request) rpc.CodecRequest {
-	return corsCodecRequest{cc.corsDomains, cc.underlyingCodec.NewRequest(req)}
+	return corsCodecRequest{cc.corsDomains, cc.Codec.NewRequest(req)}
 }
