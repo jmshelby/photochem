@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
+	_ "strings"
 
 	"github.com/gorilla/rpc/v2"
 	"github.com/gorilla/rpc/v2/json2"
@@ -37,11 +37,14 @@ func main() {
 
 	s := rpc.NewServer()
 	// json-rpc version 2
-	s.RegisterCodec(CodecWithCors([]string{"*"}, json2.NewCodec()), "application/json")
-	s.RegisterCodec(CodecWithCors([]string{"*"}, json2.NewCodec()), "application/json; charset=UTF-8")
+	s.RegisterCodec(json2.NewCodec(), "application/json")
+	s.RegisterCodec(json2.NewCodec(), "application/json; charset=UTF-8")
 	s.RegisterService(new(WebService), "PhotoChem")
-	http.Handle("/rpc", s)
+
+	// Wrap in my own handler for cors capability
+	http.Handle("/rpc", &MyServer{s})
 	http.ListenAndServe(":10000", nil)
+
 }
 
 // Web request stuff
@@ -141,29 +144,21 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 
 // TODO - Need help call
 
-// mongo shit
-
-func CodecWithCors(corsDomains []string, unpimped rpc.Codec) rpc.Codec {
-	return corsCodec{corsDomains, unpimped}
+type MyServer struct {
+	r *rpc.Server
 }
 
-type corsCodecRequest struct {
-	corsDomains []string
-	rpc.CodecRequest
-}
-
-//override exactly one method of the underlying anonymous field and delegate to it.
-func (ccr corsCodecRequest) WriteResponse(w http.ResponseWriter, reply interface{}) {
-	w.Header().Add("Access-Control-Allow-Origin", strings.Join(ccr.corsDomains, " "))
-	ccr.CodecRequest.WriteResponse(w, reply)
-}
-
-type corsCodec struct {
-	corsDomains []string
-	rpc.Codec
-}
-
-//override exactly one method of the underlying anonymous field and delegate to it.
-func (cc corsCodec) NewRequest(req *http.Request) rpc.CodecRequest {
-	return corsCodecRequest{cc.corsDomains, cc.Codec.NewRequest(req)}
+func (s *MyServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	if origin := req.Header.Get("Origin"); origin != "" {
+		rw.Header().Set("Access-Control-Allow-Origin", origin)
+		rw.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		rw.Header().Set("Access-Control-Allow-Headers",
+			"Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+	}
+	// Stop here if its Preflighted OPTIONS request
+	if req.Method == "OPTIONS" {
+		return
+	}
+	// Lets Gorilla work
+	s.r.ServeHTTP(rw, req)
 }
