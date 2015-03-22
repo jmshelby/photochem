@@ -210,6 +210,7 @@ func isListingUri(uri string) bool {
 		//fmt.Println("Url not a property, skipping..", uri)
 		return false
 	}
+
 	return true
 }
 
@@ -246,6 +247,14 @@ func shouldAddToQueue(uri string) bool {
 	// No if the host is different from the starting host
 	if url.Host != originalHost {
 		return false
+	}
+
+	// TEMP - If this is a listing uri
+	if isListingUri(uri) {
+		// No if it's not in a couple of states
+		if match, _ := regexp.MatchString("-(co|ca|ny|hi)-", strings.ToLower(uri)); !match {
+			return false
+		}
 	}
 
 	return true
