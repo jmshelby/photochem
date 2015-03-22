@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -19,7 +20,8 @@ import (
 )
 
 const (
-	DefaultWaitTime = 2000
+	DefaultWaitTime        = 2000
+	DefaultNumberOfWorkers = 3
 )
 
 var startUri string
@@ -27,6 +29,7 @@ var originalHost string
 var pagesFetched = make(map[string]bool)
 var pagesQueued = make(map[string]bool)
 var homeDb *home.DB
+var GlobalWG sync.WaitGroup
 
 func main() {
 
@@ -56,10 +59,22 @@ func main() {
 	dbHost := args[1]
 	dbName := args[2]
 
-	var waitTime int
+	var numberOfWorkers int
 	if len(args) > 3 {
 		var convErr error
-		waitTime, convErr = strconv.Atoi(args[3])
+		numberOfWorkers, convErr = strconv.Atoi(args[3])
+		if convErr != nil {
+			fmt.Printf("Bad number of workers param")
+			os.Exit(2)
+		}
+	} else {
+		numberOfWorkers = DefaultNumberOfWorkers
+	}
+
+	var waitTime int
+	if len(args) > 4 {
+		var convErr error
+		waitTime, convErr = strconv.Atoi(args[4])
 		if convErr != nil {
 			fmt.Printf("Bad param for millisecond wait time")
 			os.Exit(2)
@@ -71,29 +86,47 @@ func main() {
 	// Start Up access to our listings
 	homeDb = home.NewDB(dbHost, dbName)
 
-	pageQueue := make(chan string)
-	listingQueue := make(chan string)
+	// Make a regular queue for non-listing pages
+	pageQueue := make(chan string, numberOfWorkers)
+	// Make a prioritized queue for listings
+	listingQueue := make(chan string, numberOfWorkers)
 
-	go func() { pageQueue <- startUri }()
+	// Start up workers
+	for i := 0; i < numberOfWorkers; i++ {
+		fmt.Println("Staring up worker ", i+1)
+		go queueWorker(pageQueue, listingQueue, waitTime)
+		GlobalWG.Add(1)
+	}
 
-	for uri := range pageQueue {
+	// Prime with starting uri
+	pageQueue <- startUri
+
+	// Wait till they finish (which will probably never happen)
+	GlobalWG.Wait()
+}
+
+func queueWorker(queue, priorityQueue chan string, delay int) {
+
+	defer GlobalWG.Done()
+
+	// Start with an entry from the main queue
+	for uri := range queue {
 
 		// Chew through listing queue as higher priority
 		for {
 			select {
-			case listingUri := <-listingQueue:
-				crawl(listingUri, pageQueue, listingQueue)
-				time.Sleep(time.Duration(waitTime) * time.Millisecond)
+			case listingUri := <-priorityQueue:
+				crawl(listingUri, queue, priorityQueue)
+				time.Sleep(time.Duration(delay) * time.Millisecond)
 				continue
 			default:
 			}
 			break
 		}
 
-		crawl(uri, pageQueue, listingQueue)
+		crawl(uri, queue, priorityQueue)
 
-		time.Sleep(time.Duration(waitTime) * time.Millisecond)
-
+		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 }
 
@@ -116,8 +149,8 @@ func crawl(uri string, pageQueue, listingQueue chan string) {
 
 	body.Close()
 
-	// Pull out images, if this is a home for sale link
-	registerListing(uri, bodyString)
+	// Register Listing in our database, if its a listing
+	go registerListing(uri, bodyString)
 
 	// Pull out potential new links
 	links := collectInterestingLinks(bodyString)
@@ -263,6 +296,7 @@ func registerListing(uri, pageSource string) {
 		fmt.Printf("[INFO] Somehow listing already existed and was updated: %s - %s\n", uri, listing.Id)
 	}
 
-	fmt.Printf("Listing Registered: %+v\n", listing)
+	//fmt.Printf("Listing Registered: %+v\n", listing)
+	fmt.Printf("Listing Registered: (%v) %v\n", listing.Id.Hex(), uri)
 
 }
