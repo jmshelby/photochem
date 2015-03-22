@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nf/geocode"
-	"github.com/tdewolff/minify"
-	"github.com/tdewolff/minify/html"
+	//"github.com/tdewolff/minify"
+	//"github.com/tdewolff/minify/html"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	_ "strconv"
@@ -437,18 +437,21 @@ func (self *ListingsQuery) buildMongoQuery() bson.M {
 // Cleanup the markup for storage
 func prepareMarkupForStorage(rawMarkup string) string {
 
-	m := minify.NewMinifier()
-	m.Add("text/html", html.Minify)
+	/*
+		m := minify.NewMinifier()
+		m.Add("text/html", html.Minify)
 
-	cleaned, err := m.MinifyString("text/html", rawMarkup)
-	if err != nil {
-		fmt.Println("Problem minifying markup: ", err)
-		return rawMarkup
-	}
+		cleaned, err := m.MinifyString("text/html", rawMarkup)
+		if err != nil {
+			fmt.Println("Problem minifying markup: ", err)
+			return rawMarkup
+		}
 
-	fmt.Printf("Compressed markup from: %v to: %v \n", len(rawMarkup), len(cleaned))
+		fmt.Printf("Compressed markup from: %v to: %v \n", len(rawMarkup), len(cleaned))
 
-	return cleaned
+		return cleaned
+	*/
+	return rawMarkup
 }
 
 // Mongo Broker
