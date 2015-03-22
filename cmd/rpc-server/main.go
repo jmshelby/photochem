@@ -112,11 +112,11 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 	// TODO -- move the converting to listing structures to another function
 	response := make([]WebServiceListing, len(*listings))
 	for i, listing := range *listings {
-		photos := make([]WebServiceListingPhoto, len(listing.ImageUrls))
-		for photoIndex, image := range listing.ImageUrls {
+		photos := make([]WebServiceListingPhoto, len(listing.Images))
+		for photoIndex, image := range listing.Images {
 
 			photos[photoIndex] = WebServiceListingPhoto{
-				Src: image,
+				Src: image.Url,
 			}
 		}
 
