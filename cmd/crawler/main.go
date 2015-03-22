@@ -83,7 +83,7 @@ func main() {
 			select {
 			case listingUri := <-listingQueue:
 				crawl(listingUri, pageQueue, listingQueue)
-				time.Sleep(int64(waitTime) * time.Millisecond)
+				time.Sleep(time.Duration(waitTime) * time.Millisecond)
 				continue
 			default:
 			}
@@ -92,7 +92,7 @@ func main() {
 
 		crawl(uri, pageQueue, listingQueue)
 
-		time.Sleep(waitTime * time.Millisecond)
+		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 
 	}
 }
@@ -241,87 +241,28 @@ func resolveReferenceLink(href, base string) string {
 // Database Stuff
 
 func doesListingExist(uri string) bool {
-	return homeDb.DoesListingExist(uri)
+	_, found := homeDb.GetListingIdFromUrl(uri)
+	return (found == nil)
 }
 
 func registerListing(uri, pageSource string) {
-
-	// TODO - change this logic to register listing, and save first markup record
 
 	//fmt.Println("Parsing Images for => ", uri)
 	if !isListingUri(uri) {
 		return
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(pageSource))
+	// Register with our home db
+	listing, existed, err := homeDb.RegisterListing(uri, "homes.com", pageSource)
 	if err != nil {
-		fmt.Printf("[ERR] Couldn't parse page: %s - %s\n", uri, err)
+		fmt.Printf("[ERR] Problem registering listing: %s - %s\n", uri, err)
 		return
 	}
 
-	titleText := doc.Find("title").First().Text()
-	if !strings.Contains(titleText, " for sale |") {
-		fmt.Println("House Not for sale: ", titleText)
-		return
+	if existed {
+		fmt.Printf("[INFO] Somehow listing already existed and was updated: %s - %s\n", uri, listing.Id)
 	}
 
-	newListing, err := homeDb.RegisterListing(uri, "homes.com", pageSource)
+	fmt.Printf("Listing Registered: %+v\n", listing)
 
-	imageLinks := make([]string, 0)
-	doc.Find("#slider img").Each(func(i int, s *goquery.Selection) {
-
-		imageLink, _ := s.Attr("src")
-
-		//fmt.Println("		-> ", imageLink)
-
-		if imageLink != "" {
-			imageLinks = append(imageLinks, imageLink)
-		}
-	})
-	//fmt.Println("		--- ")
-	//fmt.Println("")
-
-	if len(imageLinks) > 0 {
-		go persistImages(uri, imageLinks)
-	}
 }
-
-// Parsing stuff ... move to an extractor
-
-// //fmt.Println("Parsing Images for => ", uri)
-// if !isListingUri(uri) {
-// 	return
-// }
-//
-// doc, err := goquery.NewDocumentFromReader(strings.NewReader(pageSource))
-// if err != nil {
-// 	fmt.Printf("[ERR] Couldn't parse page: %s - %s\n", uri, err)
-// 	return
-// }
-//
-// titleText := doc.Find("title").First().Text()
-// if !strings.Contains(titleText, " for sale |") {
-// 	fmt.Println("House Not for sale: ", titleText)
-// 	return
-// }
-//
-// imageLinks := make([]string, 0)
-// doc.Find("#slider img").Each(func(i int, s *goquery.Selection) {
-//
-// 	imageLink, _ := s.Attr("src")
-//
-// 	//fmt.Println("		-> ", imageLink)
-//
-// 	if imageLink != "" {
-// 		imageLinks = append(imageLinks, imageLink)
-// 	}
-// })
-// //fmt.Println("		--- ")
-// //fmt.Println("")
-//
-// if len(imageLinks) > 0 {
-// 	go persistImages(uri, imageLinks)
-// }
-
-// ajax image request example
-// http://www.zillow.com/AjaxRender.htm?encparams=9~646157445473039082~CB_-1qRS8CEVNENXoac54dVO6bpQ9JXPqUZQbgBILh8zxZXnO5NWnbZAECg2MhZm7uGut55uir5fNiq3HD0xFN3IJgW48jmzWCnqtH40wSQ5J-n4oSbY_7DOmv61BMVQ4hzXJ0a7oqNjRHLet28PkKEaLs_1uSSusypJdBvpTReWTDJl7HjrFxk2lvx7R_MB
