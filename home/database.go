@@ -18,17 +18,32 @@ const (
 )
 
 func NewDB(host, name string) *DB {
-	return &DB{
+	newDb := &DB{
 		Host:        host,
 		Name:        name,
 		mongoBroker: newMongoBroker(host, name),
 	}
+
+	// Make sure we have the proper indexes defined
+	newDb.ensureIndexes()
+
+	return newDb
 }
 
 type DB struct {
 	Host        string
 	Name        string
 	mongoBroker *mongoBroker
+}
+
+func (self *DB) ensureIndexes() {
+	collection := self.mongoBroker.listingCollection()
+	defer self.mongoBroker.closeCollection(collection)
+	collection.EnsureIndex(mgo.Index{Key: []string{"$2dsphere:properties.geoLocation"}})
+	collection.EnsureIndex(mgo.Index{Key: []string{"listingUrl"}})
+	collection.EnsureIndex(mgo.Index{Key: []string{"isForSale"}})
+	collection.EnsureIndex(mgo.Index{Key: []string{"properties.address.state"}})
+	collection.EnsureIndex(mgo.Index{Key: []string{"properties.address.city"}})
 }
 
 func (self *DB) GetListingIdFromUrl(uri string) (bson.ObjectId, error) {
