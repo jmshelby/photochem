@@ -360,6 +360,9 @@ func (self *DB) NewListingsQuery() *ListingsQuery {
 }
 
 type ListingsQuery struct {
+	forSaleFl bool
+	forSale   bool
+
 	limitFl bool
 	limit   uint
 
@@ -386,6 +389,7 @@ func (self *ListingsQuery) Fetch() (*[]Listing, int) {
 }
 
 func (self *ListingsQuery) Init() {
+	self.forSaleFl = false
 	self.limitFl = false
 	self.excludeFl = false
 	self.excluding = []string{}
@@ -394,6 +398,11 @@ func (self *ListingsQuery) Init() {
 	self.priceMinFl = false
 	self.priceMaxFl = false
 	self.locationFl = false
+}
+
+func (self *ListingsQuery) ForSale(forSale bool) {
+	self.forSale = forSale
+	self.forSaleFl = true
 }
 
 func (self *ListingsQuery) LimitTo(limit uint) {
@@ -438,6 +447,10 @@ func (self *ListingsQuery) NearZipCode(zip string, distance uint) {
 
 func (self *ListingsQuery) buildMongoQuery() bson.M {
 	query := bson.M{}
+
+	if self.forSaleFl {
+		query["isForSale"] = self.forSale
+	}
 
 	idQuery := bson.M{}
 	if self.excludeFl {

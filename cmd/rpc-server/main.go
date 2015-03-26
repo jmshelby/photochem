@@ -88,6 +88,8 @@ func (self *WebService) GetListings(r *http.Request, args *WebServiceListingRequ
 
 	query := homeDb.NewListingsQuery()
 
+	query.ForSale(true)
+
 	if args.Limit != 0 {
 		query.LimitTo(args.Limit)
 	}
