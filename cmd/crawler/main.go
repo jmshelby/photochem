@@ -249,6 +249,11 @@ func shouldAddToQueue(uri string) bool {
 		return false
 	}
 
+	// No if it's related to rent listings
+	if match, _ := regexp.MatchString("/(rentals|off-campus-housing)/", strings.ToLower(uri)); match {
+		return false
+	}
+
 	// TEMP - If this is a listing uri
 	if isListingUri(uri) {
 		// No if it's not in a couple of states

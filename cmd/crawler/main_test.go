@@ -21,6 +21,10 @@ func TestShouldAddToQueue(t *testing.T) {
 		{"http://www.homes.com/property/754-e-7th-ave-denver-nv-80203/id-500012484344/", false},
 		{"http://www.homes.com/property/754-e-7th-ave-denver-ut-80203/id-500012484344/", false},
 		{"http://www.homes.com/property/754-e-7th-ave-denver-nj-80203/id-500012484344/", false},
+		{"http://www.homes.com/rentals/", false},
+		{"http://www.homes.com/rentals/littleton-co/residential/", false},
+		{"http://www.homes.com/off-campus-housing/", false},
+		{"http://www.homes.com/off-campus-housing/CO", false},
 	}
 
 	for _, c := range cases {
