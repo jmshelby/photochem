@@ -99,7 +99,7 @@ func main() {
 	GlobalWG.Add(numberOfWorkers)
 
 	var count int = 0
-	homeDb.IterateListingsOlderThan(staleDate, batchAmount, func(listing home.Listing, db *home.DB) {
+	homeDb.IterateActiveListingsOlderThan(staleDate, batchAmount, func(listing home.Listing, db *home.DB) {
 		listingQueue <- listing
 		count++
 	})
@@ -124,9 +124,7 @@ func queueWorker(queue <-chan home.Listing, db *home.DB) {
 func updateListing(listing home.Listing, db *home.DB) {
 
 	// Fetch page
-	fmt.Println("Making request...")
 	bodyString, fetchErr := fetchPageString(listing.Url)
-	fmt.Println("Making request...Done")
 	if fetchErr != nil {
 		fmt.Printf("Error Fetching Markup\n  -> %s\n  ==> %s\n", listing.Url, fetchErr)
 		// TODO -- should we retry on errors??
@@ -134,9 +132,9 @@ func updateListing(listing home.Listing, db *home.DB) {
 	}
 
 	// Re-Register with our home db
-	listing, existed, err := db.RegisterListing(listing.Url, listing.Source, bodyString)
-	if err != nil {
-		fmt.Printf("[ERR] Problem re-registering listing: %s - %s\n", listing.Url, err)
+	listing, existed, info := db.RegisterListing(listing.Url, listing.Source, bodyString)
+	if info != nil {
+		fmt.Printf("[INFO] Info re-registering listing: %s - %s\n", listing.Url, info)
 		return
 	}
 
@@ -144,8 +142,8 @@ func updateListing(listing home.Listing, db *home.DB) {
 		fmt.Printf("[INFO] Somehow listing did not exist, and was inserted: %s - %s\n", listing.Url, listing.Id)
 	}
 
-	fmt.Printf("Listing Registered: %+v\n", listing)
-	//fmt.Printf("Listing Registered: (%v) %v\n", listing.Id.Hex(), listing.Url)
+	// fmt.Printf("Listing Registered: %+v\n", listing)
+	fmt.Printf("Listing Registered: (%v) %v\n", listing.Id.Hex(), listing.Url)
 
 }
 

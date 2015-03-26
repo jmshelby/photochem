@@ -306,12 +306,12 @@ func (self *DB) IterateAllListings(handler func(Listing, *DB)) error {
 	return nil
 }
 
-func (self *DB) IterateListingsOlderThan(staleDate time.Time, limit int, handler func(Listing, *DB)) error {
+func (self *DB) IterateActiveListingsOlderThan(staleDate time.Time, limit int, handler func(Listing, *DB)) error {
 
 	collection := self.mongoBroker.listingCollection()
 	defer self.mongoBroker.closeCollection(collection)
 
-	query := collection.Find(bson.M{"updatedDate": bson.M{"$lt": staleDate}})
+	query := collection.Find(bson.M{"isForSale": true, "updatedDate": bson.M{"$lt": staleDate}})
 
 	if limit != 0 {
 		query.Limit(limit)
