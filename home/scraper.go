@@ -3,6 +3,7 @@ package home
 import (
 	//"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -125,7 +126,10 @@ func (self *Scraper) ScrapeListingImages() []ListingImage {
 
 		imageLink, _ := s.Attr("src")
 
-		if imageLink != "" {
+		// Lots of listings have missing/placeholder images
+		isDeadLink, _ := regexp.MatchString("(missing)", strings.ToLower(imageLink))
+
+		if imageLink != "" && !isDeadLink {
 			images = append(images, ListingImage{Url: imageLink})
 		}
 	})
