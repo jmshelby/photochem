@@ -8,13 +8,14 @@ import (
 	//"github.com/tdewolff/minify/html"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	_ "strconv"
+	"strconv"
 	"time"
 )
 
 const (
 	ListingCollectionName        = "Listings"
 	ListingMarkeupCollectionName = "ListingsMarkup"
+	PageHistoryCollectionPrefix  = "PageHistory"
 )
 
 func NewDB(host, name string) *DB {
@@ -42,8 +43,41 @@ func (self *DB) ensureIndexes() {
 	collection.EnsureIndex(mgo.Index{Key: []string{"$2dsphere:properties.geoLocation"}})
 	collection.EnsureIndex(mgo.Index{Key: []string{"listingUrl"}})
 	collection.EnsureIndex(mgo.Index{Key: []string{"isForSale"}})
+	collection.EnsureIndex(mgo.Index{Key: []string{"properties.currentPrice"}})
 	collection.EnsureIndex(mgo.Index{Key: []string{"properties.address.state"}})
 	collection.EnsureIndex(mgo.Index{Key: []string{"properties.address.city"}})
+}
+
+func (self *DB) MarkPageVisited(uri string) {
+	collection := self.mongoBroker.pageHistoryCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	_, err := collection.Upsert(bson.M{"url": uri}, bson.M{"url": uri})
+	if err != nil {
+		fmt.Println("Error when marking visited page: ", err)
+		return
+	}
+
+}
+
+func (self *DB) WasPageVisited(uri string) bool {
+	collection := self.mongoBroker.pageHistoryCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	q := collection.Find(bson.M{"url": uri})
+
+	count, err := q.Count()
+
+	if err != nil {
+		fmt.Println("Error when getting visited page: ", err)
+		return true
+	}
+
+	if count > 1 {
+		return true
+	} else {
+		return false
+	}
 }
 
 func (self *DB) GetListingIdFromUrl(uri string) (bson.ObjectId, error) {
@@ -535,6 +569,8 @@ type mongoBroker struct {
 	Host        string
 	DBName      string
 	sessionPool *mgo.Session
+
+	pageHistoryCollectionName string
 }
 
 func (self *mongoBroker) collection(name string) *mgo.Collection {
@@ -548,6 +584,15 @@ func (self *mongoBroker) listingCollection() *mgo.Collection {
 
 func (self *mongoBroker) listingMarkupCollection() *mgo.Collection {
 	return self.collection(ListingMarkeupCollectionName)
+}
+
+func (self *mongoBroker) pageHistoryCollection() *mgo.Collection {
+	if self.pageHistoryCollectionName == "" {
+		// Initialize unique name for this session
+		timeStamp := strconv.FormatInt(time.Now().Unix(), 10)
+		self.pageHistoryCollectionName = PageHistoryCollectionPrefix + "-" + timeStamp
+	}
+	return self.collection(self.pageHistoryCollectionName)
 }
 
 func (self *mongoBroker) closeCollection(collection *mgo.Collection) {

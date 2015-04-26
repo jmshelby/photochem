@@ -26,7 +26,6 @@ const (
 
 var startUri string
 var originalHost string
-var pagesFetched = make(map[string]bool)
 var pagesQueued = make(map[string]bool)
 var homeDb *home.DB
 var GlobalWG sync.WaitGroup
@@ -133,9 +132,10 @@ func queueWorker(queue, priorityQueue chan string, delay int) {
 func crawl(uri string, pageQueue, listingQueue chan string) {
 
 	fmt.Println("Fetching: ", uri)
+	fmt.Println("Queue Size: ", len(pagesQueued))
 
 	body := fetchPage(uri)
-	pagesFetched[uri] = true
+	markPageVisited(uri)
 	delete(pagesQueued, uri)
 
 	if body == nil {
@@ -163,7 +163,7 @@ func crawl(uri string, pageQueue, listingQueue chan string) {
 				continue
 			}
 
-			if !pagesFetched[absolute] && shouldAddToQueue(absolute) {
+			if shouldAddToQueue(absolute) {
 				//fmt.Println("		-> Adding: ", absolute);
 				if isListingUri(absolute) {
 					if doesListingExist(absolute) {
@@ -262,6 +262,10 @@ func shouldAddToQueue(uri string) bool {
 		}
 	}
 
+	if wasPageVisited(uri) {
+		return false
+	}
+
 	return true
 }
 
@@ -286,6 +290,14 @@ func resolveReferenceLink(href, base string) string {
 }
 
 // Database Stuff
+
+func markPageVisited(uri string) {
+	homeDb.MarkPageVisited(uri)
+}
+
+func wasPageVisited(uri string) bool {
+	return homeDb.WasPageVisited(uri)
+}
 
 func doesListingExist(uri string) bool {
 	_, found := homeDb.GetListingIdFromUrl(uri)
