@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -26,11 +28,12 @@ const (
 
 var startUri string
 var originalHost string
-var pagesQueued = make(map[string]bool)
 var homeDb *home.DB
 var GlobalWG sync.WaitGroup
 
 func main() {
+
+	initDestruct()
 
 	flag.Parse()
 	args := flag.Args()
@@ -102,6 +105,28 @@ func main() {
 
 	// Wait till they finish (which will probably never happen)
 	GlobalWG.Wait()
+
+	// Cleanup
+	cleanup()
+}
+
+func cleanup() {
+	// Call cleanup on our db instance
+	if homeDb != nil {
+		homeDb.Cleanup()
+	}
+}
+
+func initDestruct() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, syscall.SIGTERM)
+	go func() {
+		<-c
+		fmt.Printf("Caught Interupt Signal, cleaning up, and exiting...\n")
+		cleanup()
+		os.Exit(1)
+	}()
 }
 
 func queueWorker(queue, priorityQueue chan string, delay int) {
@@ -132,11 +157,10 @@ func queueWorker(queue, priorityQueue chan string, delay int) {
 func crawl(uri string, pageQueue, listingQueue chan string) {
 
 	fmt.Println("Fetching: ", uri)
-	fmt.Println("Queue Size: ", len(pagesQueued))
 
 	body := fetchPage(uri)
 	markPageVisited(uri)
-	delete(pagesQueued, uri)
+	deQueuePage(uri)
 
 	if body == nil {
 		fmt.Println("Problem Fetching, skipping ...")
@@ -159,7 +183,7 @@ func crawl(uri string, pageQueue, listingQueue chan string) {
 		absolute := resolveReferenceLink(link, uri)
 		if uri != "" {
 
-			if pagesQueued[absolute] {
+			if isPageQueued(absolute) {
 				continue
 			}
 
@@ -174,7 +198,7 @@ func crawl(uri string, pageQueue, listingQueue chan string) {
 				} else {
 					go func() { pageQueue <- absolute }()
 				}
-				pagesQueued[absolute] = true
+				queuePage(absolute)
 				//fmt.Println(absolute)
 			}
 		}
@@ -291,6 +315,8 @@ func resolveReferenceLink(href, base string) string {
 
 // Database Stuff
 
+// History
+
 func markPageVisited(uri string) {
 	homeDb.MarkPageVisited(uri)
 }
@@ -299,6 +325,21 @@ func wasPageVisited(uri string) bool {
 	return homeDb.WasPageVisited(uri)
 }
 
+// Queue Tracking
+
+func isPageQueued(uri string) bool {
+	return homeDb.IsPageQueued(uri)
+}
+
+func queuePage(uri string) {
+	homeDb.QueuePage(uri)
+}
+
+func deQueuePage(uri string) {
+	homeDb.DeQueuePage(uri)
+}
+
+// Listings
 func doesListingExist(uri string) bool {
 	_, found := homeDb.GetListingIdFromUrl(uri)
 	return (found == nil)

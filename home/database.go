@@ -16,6 +16,7 @@ const (
 	ListingCollectionName        = "Listings"
 	ListingMarkeupCollectionName = "ListingsMarkup"
 	PageHistoryCollectionPrefix  = "PageHistory"
+	PageQueueCollectionPrefix    = "PageQueue"
 )
 
 func NewDB(host, name string) *DB {
@@ -48,6 +49,30 @@ func (self *DB) ensureIndexes() {
 	collection.EnsureIndex(mgo.Index{Key: []string{"properties.address.city"}})
 }
 
+func (self *DB) Cleanup() {
+
+	// Remove temporary page history
+	fmt.Println("DB::Cleanup: droping history collection: " + self.mongoBroker.pageHistoryCollectionName + "...")
+	histErr := self.mongoBroker.pageHistoryCollection().DropCollection()
+	fmt.Println("DB::Cleanup: droping history collection: " + self.mongoBroker.pageHistoryCollectionName + "...Done")
+
+	if histErr != nil {
+		fmt.Println("Error when cleaning up history collection: ", histErr)
+	}
+
+	// Remove temporary page queue
+	fmt.Println("DB::Cleanup: droping queue collection: " + self.mongoBroker.pageHistoryCollectionName + "...")
+	queueErr := self.mongoBroker.pageQueueCollection().DropCollection()
+	fmt.Println("DB::Cleanup: droping queue collection: " + self.mongoBroker.pageHistoryCollectionName + "...Done")
+
+	if queueErr != nil {
+		fmt.Println("Error when cleaning up queue collection: ", queueErr)
+	}
+
+}
+
+// Page History
+
 func (self *DB) MarkPageVisited(uri string) {
 	collection := self.mongoBroker.pageHistoryCollection()
 	defer self.mongoBroker.closeCollection(collection)
@@ -77,6 +102,50 @@ func (self *DB) WasPageVisited(uri string) bool {
 		return true
 	} else {
 		return false
+	}
+}
+
+// Page Queue
+
+func (self *DB) IsPageQueued(uri string) bool {
+	collection := self.mongoBroker.pageQueueCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	q := collection.Find(bson.M{"url": uri})
+
+	count, err := q.Count()
+
+	if err != nil {
+		fmt.Println("Error when getting queued page: ", err)
+		return true
+	}
+
+	if count > 1 {
+		return true
+	} else {
+		return false
+	}
+}
+
+func (self *DB) QueuePage(uri string) {
+	collection := self.mongoBroker.pageQueueCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	_, err := collection.Upsert(bson.M{"url": uri}, bson.M{"url": uri})
+	if err != nil {
+		fmt.Println("Error when queing page: ", err)
+		return
+	}
+}
+
+func (self *DB) DeQueuePage(uri string) {
+	collection := self.mongoBroker.pageQueueCollection()
+	defer self.mongoBroker.closeCollection(collection)
+
+	err := collection.Remove(bson.M{"url": uri})
+	if err != nil {
+		fmt.Println("Error when removing queued page: ", err)
+		return
 	}
 }
 
@@ -571,6 +640,7 @@ type mongoBroker struct {
 	sessionPool *mgo.Session
 
 	pageHistoryCollectionName string
+	pageQueueCollectionName   string
 }
 
 func (self *mongoBroker) collection(name string) *mgo.Collection {
@@ -593,6 +663,15 @@ func (self *mongoBroker) pageHistoryCollection() *mgo.Collection {
 		self.pageHistoryCollectionName = PageHistoryCollectionPrefix + "-" + timeStamp
 	}
 	return self.collection(self.pageHistoryCollectionName)
+}
+
+func (self *mongoBroker) pageQueueCollection() *mgo.Collection {
+	if self.pageQueueCollectionName == "" {
+		// Initialize unique name for this session
+		timeStamp := strconv.FormatInt(time.Now().Unix(), 10)
+		self.pageQueueCollectionName = PageQueueCollectionPrefix + "-" + timeStamp
+	}
+	return self.collection(self.pageQueueCollectionName)
 }
 
 func (self *mongoBroker) closeCollection(collection *mgo.Collection) {
