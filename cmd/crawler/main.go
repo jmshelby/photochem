@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -85,9 +86,17 @@ func main() {
 		waitTime = DefaultWaitTime
 	}
 
+	unlocked := acquireLock(9293)
+	if !unlocked {
+		fmt.Println("Process already running")
+		os.Exit(0)
+	}
+
 	// Start Up access to our listings
 	homeDb = home.NewDB(dbHost, dbName)
 
+	// Make a channel to pass new interesting links
+	linkQueue := make(chan string, 100)
 	// Make a regular queue for non-listing pages
 	pageQueue := make(chan string, numberOfWorkers)
 	// Make a prioritized queue for listings
@@ -96,9 +105,13 @@ func main() {
 	// Start up workers
 	for i := 0; i < numberOfWorkers; i++ {
 		fmt.Println("Staring up worker ", i+1)
-		go queueWorker(pageQueue, listingQueue, waitTime)
+		go queueWorker(pageQueue, listingQueue, linkQueue, waitTime, i+1)
 		GlobalWG.Add(1)
 	}
+
+	// Start link router
+	go queueRouter(linkQueue, listingQueue, pageQueue)
+	GlobalWG.Add(1)
 
 	// Prime with starting uri
 	pageQueue <- startUri
@@ -111,6 +124,9 @@ func main() {
 }
 
 func cleanup() {
+
+	// TODO - close channels
+
 	// Call cleanup on our db instance
 	if homeDb != nil {
 		homeDb.Cleanup()
@@ -129,7 +145,36 @@ func initDestruct() {
 	}()
 }
 
-func queueWorker(queue, priorityQueue chan string, delay int) {
+func queueRouter(linkQueue, listingQueue, pageQueue chan string) {
+
+	defer GlobalWG.Done()
+
+	var pagesQueued = make(map[string]bool)
+
+	for link := range linkQueue {
+
+		// Skip if we've seen it before
+		if pagesQueued[link] {
+			continue
+		}
+		// Remember that we saw this link
+		pagesQueued[link] = true
+
+		// Route
+		if isListingUri(link) {
+			if doesListingExist(link) {
+				fmt.Println("Listing already exists, skipping: ", link)
+			} else {
+				go func(listingLink string) { listingQueue <- listingLink }(link)
+			}
+		} else {
+			go func(pageLink string) { pageQueue <- pageLink }(link)
+		}
+
+	}
+}
+
+func queueWorker(queue, priorityQueue, linkQueue chan string, delay int, workerNumber int) {
 
 	defer GlobalWG.Done()
 
@@ -140,7 +185,7 @@ func queueWorker(queue, priorityQueue chan string, delay int) {
 		for {
 			select {
 			case listingUri := <-priorityQueue:
-				crawl(listingUri, queue, priorityQueue)
+				crawl(listingUri, linkQueue)
 				time.Sleep(time.Duration(delay) * time.Millisecond)
 				continue
 			default:
@@ -148,19 +193,16 @@ func queueWorker(queue, priorityQueue chan string, delay int) {
 			break
 		}
 
-		crawl(uri, queue, priorityQueue)
+		crawl(uri, linkQueue)
 
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 }
 
-func crawl(uri string, pageQueue, listingQueue chan string) {
+func crawl(uri string, linkQueue chan string) {
 
 	fmt.Println("Fetching: ", uri)
-
 	body := fetchPage(uri)
-	markPageVisited(uri)
-	deQueuePage(uri)
 
 	if body == nil {
 		fmt.Println("Problem Fetching, skipping ...")
@@ -174,32 +216,17 @@ func crawl(uri string, pageQueue, listingQueue chan string) {
 	body.Close()
 
 	// Register Listing in our database, if its a listing
-	go registerListing(uri, bodyString)
+	registerListing(uri, bodyString)
 
 	// Pull out potential new links
 	links := collectInterestingLinks(bodyString)
 
 	for _, link := range links {
 		absolute := resolveReferenceLink(link, uri)
-		if uri != "" {
-
-			if isPageQueued(absolute) {
-				continue
-			}
-
+		if absolute != "" {
 			if shouldAddToQueue(absolute) {
-				//fmt.Println("		-> Adding: ", absolute);
-				if isListingUri(absolute) {
-					if doesListingExist(absolute) {
-						fmt.Println("Listing already exists, skipping: ", absolute)
-					} else {
-						go func() { listingQueue <- absolute }()
-					}
-				} else {
-					go func() { pageQueue <- absolute }()
-				}
-				queuePage(absolute)
-				//fmt.Println(absolute)
+				// Pass to queue to be routed/prioritized
+				linkQueue <- absolute
 			}
 		}
 	}
@@ -286,10 +313,6 @@ func shouldAddToQueue(uri string) bool {
 		}
 	}
 
-	if wasPageVisited(uri) {
-		return false
-	}
-
 	return true
 }
 
@@ -366,4 +389,26 @@ func registerListing(uri, pageSource string) {
 	//fmt.Printf("Listing Registered: %+v\n", listing)
 	fmt.Printf("Listing Registered: (%v) %v\n", listing.Id.Hex(), uri)
 
+}
+
+// Process Level Lock
+
+func acquireLock(lockId int) bool {
+
+	// Hacky way to lock this process down to only one process
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", lockId))
+	if err != nil {
+		if strings.Index(err.Error(), "in use") != -1 {
+			return false
+		} else {
+			panic(err)
+		}
+	}
+
+	// TODO - anything else we need to do to keep this open??
+	go func() {
+		listener.Accept()
+	}()
+
+	return true
 }
